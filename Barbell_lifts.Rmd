@@ -1,0 +1,257 @@
+---
+title: "Unilateral Dumbbell Biceps Curl"
+author: "Michael Berger"
+date: "9 April 2018"  
+output: html_document
+---
+
+##Importing libraries
+```{r beginning, include=FALSE}
+#rm(list = ls())
+library(ggplot2)
+library(plyr)
+library(caret)
+setwd("~/Studies/Coursera/8 - Practical machine learning/Project")
+print(getwd())
+```
+
+
+
+##Importing data 
+```{r beg, include=FALSE}
+#rm(list = ls())
+#knitr::opts_chunk$set(echo = TRUE)
+if(!file.exists("data/pml-training.csv"))
+{
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+}
+print('hello2')
+if(!file.exists("data/pml-training.csv"))
+{
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+}
+```
+
+
+
+##Importing data 
+
+```{r importing}
+trn <- read.csv("data/pml-training.csv")
+tst <- read.csv("data/pml-testing.csv")
+```
+
+## Removing missing data 
+Based on number of non-empty values in each column. 
+```{r cleaning}
+# col <- trn$skewness_pitch_forearm
+# length(col)
+# sum(col == '')
+# col[is.na(col)]
+#sum(col!=cc)
+
+nonTrash <- function(col) 
+{
+  col[col == '#DIV/0!'] = '';
+  col[is.na(col)] = '';
+  sum(col != '');
+}
+
+nonT <- apply(trn,2, nonTrash)
+
+#just view whats going on
+# ord <- order(nonT)
+# plot(nonT[ord], type = 'h')
+# nonT
+# table(nonT)
+
+nms = names(nonT[nonT>500])
+nms = nms[ ! nms %in% c("raw_timestamp_part_1","raw_timestamp_part_2","num_window","new_window","cvtd_timestamp")]
+trainingSet = trn[,nms]
+nms = nms[!nms == "classe"]
+testingSet = tst[,nms]
+# trnidx = sample(seq(1,dim(trn)[1]), round(0.7 * nrow(trn)))
+# trainingSet<-  trn[trnidx,]
+# testingSet<-  trn[-trnidx,]
+
+rm(nms, nonT, trn, tst, nonTrash)
+# small = sample(seq(1,dim(trainingSet)[1]), 50)
+# tstsmall<- trn[small,nms]#[-54]]
+# 
+# 
+# testingnames <- names(tst)
+# nms %in% testingnames
+```
+
+
+```{r useParallel, echo=TRUE, warning=FALSE, eval=FALSE}
+library(iterators,quietly=TRUE)
+library(parallel,quietly=TRUE)
+library(foreach,quietly=TRUE)
+library(doParallel,quietly=TRUE)
+cluster <- makeCluster(detectCores()-1)
+registerDoParallel(cluster)
+
+```
+
+## Stop cluster
+```{r eval=FALSE, include=FALSE}
+cluster
+stopCluster(cluster)
+```
+
+## Random forest model
+```{r}
+tic <- Sys.time()
+tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+mdlRf <-train( classe ~ . , data = trainingSet ,method="rf", trControl = tC)
+toc <- Sys.time() - tic
+mdlRf$
+paste("mdlRf trained in ",toc,attr(toc,"units"))
+mdlRf$results
+
+# predsRf <- predict(mdlRf, type="raw", newdata=testingSet)
+# mean(predsRf == testingSet$classe)
+```
+
+
+## Gradient boosting model
+```{r}
+tic <- Sys.time()
+tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+mdlGbm <-train( classe ~ . , data = trainingSet ,method="gbm", trControl = tC)
+toc <- Sys.time() - tic
+paste("mdlGbm trained in ",toc,attr(toc,"units"))
+
+mdlGbm$results
+
+# predsRf <- predict(mdlGbm, type="raw", newdata=testingSet)
+# mean(predsRf == testingSet$classe)
+
+
+```
+
+## Multionomial logistic regresssion model 
+```{r}
+method = 'multinom'
+tic <- Sys.time()
+tC = trainControl(method="cv", number=7,allowParallel=TRUE)
+mdlMulti <-train(classe ~ ., data = trainingSet, maxit=10000, trace=F,method="multinom", trControl = tC)
+toc <- Sys.time() - tic
+paste("mdlMulti trained in: ",toc,attr(toc,"units"))
+
+mdlMulti$results
+
+# preds1 <- predict(mdlMulti, type="raw", newdata=testingSet)
+# mean(preds1 == testingSet$classe)
+# 
+# 
+# tC2 = trainControl(method="none", allowParallel=TRUE)
+# tic <- Sys.time()
+# mdlMulti2 <-train(classe ~ ., data = trainingSet, maxit=10000, trace=F,method="multinom", trControl = tC2)
+# toc <- Sys.time() - tic
+# paste("mdlMulti2 trained in: ",toc,attr(toc,"units"))
+# 
+# preds2 <- predict(mdlMulti2, type="raw", newdata=testingSet)
+# mean(preds2 == testingSet$classe)
+# 
+# confusionMatrix(preds2, testingSet$classe)
+# 
+# mean(preds1 == preds2)
+```
+
+
+## Linear Discriminant Analysis model
+```{r}
+tic <- Sys.time()
+tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+mdlLda <-train( classe ~ . , data = trainingSet ,method="lda", trControl = tC)
+toc <- Sys.time() - tic
+paste("mdlLda trained in ",toc,attr(toc,"units"))
+#mdlGbm$times$everything['elapsed']
+mdlLda$results
+
+# predsRf <- predict(mdlGbm, type="raw", newdata=testingSet)
+# mean(predsRf == testingSet$classe)
+
+
+```
+
+
+## Saving/Reading the models to disc
+```{r}
+#Saving
+
+models <- mget(ls(pattern = 'mdl*'))
+#models =  list("mdlRf" = mdlRf, "mdlMulti"=mdlMulti,"mdlMulti2"=mdlMulti2)
+saveRDS(models, paste("models_",Sys.Date(),".rds", sep = ''))
+rm(models)
+```
+
+```{r}
+#Reading and creating an object in global environment for every model 
+models = readRDS("models.rds")
+
+lapply(X = names(models), FUN = function(name) {assign(name,  models[[name]], envir = .GlobalEnv)})
+
+# mdlRf = models["mdlRf"]
+# mdlMulti = models["mdlMulti"]
+# mdlMulti2 = models["mdlMulti2"]
+```
+
+```{r}
+mdlMulti$control
+```
+
+## Exploratory
+
+```{r exploratory}
+g <- ggplot(data = trn) + geom_point(aes( y = num_window, x = raw_timestamp_part_1 + raw_timestamp_part_2, col = user_name), size = .1) 
+g
+```
+
+```{r exploratory}
+trnsub <- trn[trn$user_name == "carlitos",]
+g <- ggplot(data = trnsub[1:1000,]) + geom_line(aes( y = num_window, x = raw_timestamp_part_1 + raw_timestamp_part_2, col = num_window), size = .1) 
+g
+#plot(trn$num_window)
+```
+
+```{r exploratory}
+trnsub <- trn[trn$user_name == "carlitos" & trn$classe %in% c("A" , "B"),]
+g <- ggplot(data = trnsub) + geom_line(aes( y = var_accel_arm, x = raw_timestamp_part_1 +raw_timestamp_part_2 , color = classe),  size = .1 ) 
+g
+#plot(trn$num_window)
+```
+
+```{r exploratory}
+trnsub <- trn[trn$user_name == "carlitos" & trn$classe == "A",]
+
+g <- ggplot(data = subset(trnsub, classe %in% c("A" , "A"))) + geom_line(aes( y = pitch_arm, x = raw_timestamp_part_1 , color = classe),  size = .1 ) 
+g
+#plot(trn$num_window)
+```
+
+
+
+```{r exploratory}
+trnsub <- trn[trn$user_name == "carlitos",]
+g <- ggplot(data = trnsub) 
+
+g <- g + geom_line(aes( y = roll_belt, x = raw_timestamp_part_1 + raw_timestamp_part_2), color = "red", size = .1) 
+
+g <- g + geom_line(aes( y = pitch_belt, x = raw_timestamp_part_1 + raw_timestamp_part_2), color = "green", size = .1) 
+
+g <- g +  geom_line(aes( y = yaw_belt, x = raw_timestamp_part_1 + raw_timestamp_part_2), color = "blue", size = .1) 
+g
+#plot(trn$num_window)
+```
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
