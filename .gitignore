@@ -1,5 +1,5 @@
 data
-
+models_*
 
 # History files
 .Rhistory

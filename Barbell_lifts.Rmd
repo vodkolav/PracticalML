@@ -1,24 +1,35 @@
 ---
-title: "Unilateral Dumbbell Biceps Curl"
+title: "Human activity recognition"
 author: "Michael Berger"
 date: "9 April 2018"  
 output: html_document
 ---
 
-##Importing libraries
-```{r beginning, include=FALSE}
+
+With the developement of cheap electronics, a trend has been on the rise lately to measure and record all kinds of personal data. One type of such data is accelerometer readings from various fitness trackers during excersises.
+In this study I am asked to develop a model which will be able to classify performance quality of the excersise based on these readings.
+
+The data is provided by Groupware@LES team of Pontifical Catholic University of Rio de Janeiro.
+It contains data gathered in a Unilateral Dumbbell Biceps Curl excersise by 5 people done in a correct way and in 4 incorrect ways. The goal of the study is to correctly classify types of mistakes.
+
+## Exploratory analysis
+From a brief look on the dataset one can hypothesise that a lot of columns have almost no useful data in them. To check this I make a plot of counts of non-null cells for every column.
+
+```{r importing_libraries, echo = F, message=FALSE, warning=FALSE, include=T}
 #rm(list = ls())
-library(ggplot2)
-library(plyr)
-library(caret)
-setwd("~/Studies/Coursera/8 - Practical machine learning/Project")
-print(getwd())
+library(ggplot2,quietly=TRUE)
+library(plyr,quietly=TRUE)
+library(caret,quietly=TRUE)
+library(randomForest,quietly=TRUE)
+library(iterators,quietly=TRUE)
+library(parallel,quietly=TRUE)
+library(foreach,quietly=TRUE)
+library(doParallel,quietly=TRUE)
+#setwd("~/Studies/Coursera/8 - Practical machine learning/Project/PracticalML/")
+#print(getwd())
 ```
 
-
-
-##Importing data 
-```{r beg, include=FALSE}
+```{r downloading_data_if_needed, include=FALSE}
 #rm(list = ls())
 #knitr::opts_chunk$set(echo = TRUE)
 if(!file.exists("data/pml-training.csv"))
@@ -32,23 +43,20 @@ download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.c
 }
 ```
 
-
-
-##Importing data 
-
-```{r importing}
+```{r importing_data,echo = F, eval = T}
 trn <- read.csv("data/pml-training.csv")
-tst <- read.csv("data/pml-testing.csv")
+vld <- read.csv("data/pml-testing.csv")
 ```
 
-## Removing missing data 
-Based on number of non-empty values in each column. 
-```{r cleaning}
+```{r cleaning_data,echo = F, eval = T, cache=T, fig.height = 3 }
+# Removing missing data 
+#Based on number of non-empty values in each column. 
+
 # col <- trn$skewness_pitch_forearm
 # length(col)
 # sum(col == '')
 # col[is.na(col)]
-#sum(col!=cc)
+#sum(col!=cc) 
 
 nonTrash <- function(col) 
 {
@@ -57,24 +65,32 @@ nonTrash <- function(col)
   sum(col != '');
 }
 
+#Selecting what columns to leave
 nonT <- apply(trn,2, nonTrash)
-
-#just view whats going on
-# ord <- order(nonT)
-# plot(nonT[ord], type = 'h')
-# nonT
-# table(nonT)
-
+ord <- order(nonT)
+plot(nonT[ord], type = 'h' )
 nms = names(nonT[nonT>500])
-nms = nms[ ! nms %in% c("raw_timestamp_part_1","raw_timestamp_part_2","num_window","new_window","cvtd_timestamp")]
-trainingSet = trn[,nms]
-nms = nms[!nms == "classe"]
-testingSet = tst[,nms]
-# trnidx = sample(seq(1,dim(trn)[1]), round(0.7 * nrow(trn)))
-# trainingSet<-  trn[trnidx,]
-# testingSet<-  trn[-trnidx,]
+nms = nms[ ! nms %in% c("X", "raw_timestamp_part_1","raw_timestamp_part_2","num_window","new_window","cvtd_timestamp")]
 
-rm(nms, nonT, trn, tst, nonTrash)
+#Selecting what rows to leave (Since classe A has about 2000 entries more than all the rest of the classes, there is need to equalize frequencies)
+# cnts <- count(trn$classe)
+# As <- which(trn$classe == "A")
+# trnidx = sample(As, round(cnts[1,]$freq-mean(cnts[2:5,]$freq)))
+
+
+trainingSet <- trn[,nms]
+trnidx <- createDataPartition(trainingSet$classe,p=.7,list=FALSE)
+testingSet = trainingSet[-trnidx,]
+trainingSet = trainingSet[trnidx,]
+
+nms = nms[!nms == "classe"]
+validatSet = vld[,nms]
+
+
+rm(nms, nonT, nonTrash, cnts, As, trnidx)# , trn, tst,vld)
+
+
+
 # small = sample(seq(1,dim(trainingSet)[1]), 50)
 # tstsmall<- trn[small,nms]#[-54]]
 # 
@@ -84,85 +100,69 @@ rm(nms, nonT, trn, tst, nonTrash)
 ```
 
 
-```{r useParallel, echo=TRUE, warning=FALSE, eval=FALSE}
-library(iterators,quietly=TRUE)
-library(parallel,quietly=TRUE)
-library(foreach,quietly=TRUE)
-library(doParallel,quietly=TRUE)
+As can be seen on the plot, about a 100 out of 160 variables have less than 3% meaningful data in them.  Moreover, there are temporal, entry index and measuring window columns which bear no significant information as well. Deleting these will improve performance and accuracy of the model.
+In the end I am left with 53 predictor and 1 dependent variables 
+
+## Models
+I am going to use brute force. Just train a number of models using 7-fold cross validation technique and choose the one with best predictive power. The models I have chosen are:
+ - Gradient boosting model
+ - Linear discriminant analysis
+ - Multiple logistic regression
+ - Naive Bayes
+ - Random Forest
+Parallel processing will be used to speed things up.
+
+
+
+```{r start_cluster, echo=F, warning=FALSE, eval=T}
+#Start cluster
 cluster <- makeCluster(detectCores()-1)
 registerDoParallel(cluster)
-
+if(file.exists("models.rds"))
+{
+  models = readRDS("models.rds")
+}
 ```
 
-## Stop cluster
-```{r eval=FALSE, include=FALSE}
-cluster
-stopCluster(cluster)
-```
 
-## Random forest model
-```{r}
+```{r mdlRf, echo=F, include=F, warning=FALSE, eval=T, cache= TRUE}
+# Random forest model
 tic <- Sys.time()
 tC = trainControl(method="cv", number=7, allowParallel=TRUE)
 mdlRf <-train( classe ~ . , data = trainingSet ,method="rf", trControl = tC)
 toc <- Sys.time() - tic
-mdlRf$
 paste("mdlRf trained in ",toc,attr(toc,"units"))
+max(mdlRf$results$Accuracy)
 mdlRf$results
 
-# predsRf <- predict(mdlRf, type="raw", newdata=testingSet)
-# mean(predsRf == testingSet$classe)
 ```
 
-
-## Gradient boosting model
-```{r}
+```{r mdlGbm, echo=F, include=F,warning=FALSE, eval=T, cache= TRUE }
+# Gradient boosting model
 tic <- Sys.time()
 tC = trainControl(method="cv", number=7, allowParallel=TRUE)
 mdlGbm <-train( classe ~ . , data = trainingSet ,method="gbm", trControl = tC)
 toc <- Sys.time() - tic
 paste("mdlGbm trained in ",toc,attr(toc,"units"))
 
-mdlGbm$results
-
-# predsRf <- predict(mdlGbm, type="raw", newdata=testingSet)
-# mean(predsRf == testingSet$classe)
-
-
 ```
 
-## Multionomial logistic regresssion model 
-```{r}
-method = 'multinom'
+```{r mdlMulti, echo=F, include=F, warning=FALSE, eval=T, cache= TRUE}
+# Multionomial logistic regression model 
+
 tic <- Sys.time()
 tC = trainControl(method="cv", number=7,allowParallel=TRUE)
-mdlMulti <-train(classe ~ ., data = trainingSet, maxit=10000, trace=F,method="multinom", trControl = tC)
+mdlMulti <-train(classe ~ ., data = trainingSet, maxit=20000, trace=F,method="multinom", trControl = tC)
 toc <- Sys.time() - tic
 paste("mdlMulti trained in: ",toc,attr(toc,"units"))
 
 mdlMulti$results
 
-# preds1 <- predict(mdlMulti, type="raw", newdata=testingSet)
-# mean(preds1 == testingSet$classe)
-# 
-# 
-# tC2 = trainControl(method="none", allowParallel=TRUE)
-# tic <- Sys.time()
-# mdlMulti2 <-train(classe ~ ., data = trainingSet, maxit=10000, trace=F,method="multinom", trControl = tC2)
-# toc <- Sys.time() - tic
-# paste("mdlMulti2 trained in: ",toc,attr(toc,"units"))
-# 
-# preds2 <- predict(mdlMulti2, type="raw", newdata=testingSet)
-# mean(preds2 == testingSet$classe)
-# 
-# confusionMatrix(preds2, testingSet$classe)
-# 
-# mean(preds1 == preds2)
+
 ```
 
-
-## Linear Discriminant Analysis model
-```{r}
+```{r mdlLda, echo=F, include=F, warning=FALSE, eval=T, cache= TRUE}
+# Linear Discriminant Analysis model
 tic <- Sys.time()
 tC = trainControl(method="cv", number=7, allowParallel=TRUE)
 mdlLda <-train( classe ~ . , data = trainingSet ,method="lda", trControl = tC)
@@ -171,60 +171,84 @@ paste("mdlLda trained in ",toc,attr(toc,"units"))
 #mdlGbm$times$everything['elapsed']
 mdlLda$results
 
-# predsRf <- predict(mdlGbm, type="raw", newdata=testingSet)
-# mean(predsRf == testingSet$classe)
+```
 
+```{r mdlNb, echo=F, include=F, warning=FALSE, eval=T, cache= TRUE}
+# Naive Bayes model
+tic <- Sys.time()
+tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+mdlNb <-train( classe ~ . , data = trainingSet ,method="nb", trControl = tC)
+toc <- Sys.time() - tic
+paste("mdlNb trained in ",toc,attr(toc,"units"))
+mdlNb$results
 
 ```
 
 
-## Saving/Reading the models to disc
-```{r}
-#Saving
+```{r stop_cluster, echo=F, include=F, warning=FALSE, eval=T}
+#Stop cluster
+cluster
+stopCluster(cluster)
+```
 
+
+```{r Saving, echo=F, include=F,  warning=F, eval=T}
+#Saving the models to disc
 models <- mget(ls(pattern = 'mdl*'))
-#models =  list("mdlRf" = mdlRf, "mdlMulti"=mdlMulti,"mdlMulti2"=mdlMulti2)
-saveRDS(models, paste("models_",Sys.Date(),".rds", sep = ''))
+fname <- paste("models_",Sys.Date(),".rds", sep = '')
+saveRDS(models, fname)
+file.copy(from = fname,to = 'models.rds',overwrite = T)
 rm(models)
 ```
 
-```{r}
+```{r Reading, echo=F, warning=F, eval=F}
 #Reading and creating an object in global environment for every model 
 models = readRDS("models.rds")
 
 lapply(X = names(models), FUN = function(name) {assign(name,  models[[name]], envir = .GlobalEnv)})
 
-# mdlRf = models["mdlRf"]
-# mdlMulti = models["mdlMulti"]
-# mdlMulti2 = models["mdlMulti2"]
 ```
 
-```{r}
-mdlMulti$control
+```{r Accuracies, echo=F}
+models <- mget(ls(pattern = 'mdl*'))
+accs <- as.data.frame(lapply(X = models, FUN = function(x) {c('accuracy' = max(x$results$Accuracy), x$times$everything['elapsed'])}))
+accs
 ```
 
-## Exploratory
 
-```{r exploratory}
+
+```{r prediction, echo=F} 
+#Prediction;  out of sample error rate
+pred <- predict(mdlRf, newdata = testingSet)
+mean(pred == testingSet$classe)
+confusionMatrix(pred, testingSet$classe)
+```
+
+```{r exploratory1, eval=FALSE, include=FALSE}
+g <- ggplot(data = trainingSet) + geom_bar(aes(classe), size = .1) 
+g
+```
+
+```{r exploratory2, eval=FALSE, include=FALSE}
 g <- ggplot(data = trn) + geom_point(aes( y = num_window, x = raw_timestamp_part_1 + raw_timestamp_part_2, col = user_name), size = .1) 
 g
 ```
 
-```{r exploratory}
+```{r exploratory3, eval=FALSE, include=FALSE}
 trnsub <- trn[trn$user_name == "carlitos",]
 g <- ggplot(data = trnsub[1:1000,]) + geom_line(aes( y = num_window, x = raw_timestamp_part_1 + raw_timestamp_part_2, col = num_window), size = .1) 
 g
 #plot(trn$num_window)
 ```
 
-```{r exploratory}
+```{r exploratory4, eval=FALSE, include=FALSE}
 trnsub <- trn[trn$user_name == "carlitos" & trn$classe %in% c("A" , "B"),]
 g <- ggplot(data = trnsub) + geom_line(aes( y = var_accel_arm, x = raw_timestamp_part_1 +raw_timestamp_part_2 , color = classe),  size = .1 ) 
 g
 #plot(trn$num_window)
 ```
 
-```{r exploratory}
+```{r exploratory5, eval=FALSE, include=FALSE}
 trnsub <- trn[trn$user_name == "carlitos" & trn$classe == "A",]
 
 g <- ggplot(data = subset(trnsub, classe %in% c("A" , "A"))) + geom_line(aes( y = pitch_arm, x = raw_timestamp_part_1 , color = classe),  size = .1 ) 
@@ -232,9 +256,7 @@ g
 #plot(trn$num_window)
 ```
 
-
-
-```{r exploratory}
+```{r exploratory6, eval=FALSE, include=FALSE}
 trnsub <- trn[trn$user_name == "carlitos",]
 g <- ggplot(data = trnsub) 
 
@@ -246,12 +268,3 @@ g <- g +  geom_line(aes( y = yaw_belt, x = raw_timestamp_part_1 + raw_timestamp_
 g
 #plot(trn$num_window)
 ```
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
