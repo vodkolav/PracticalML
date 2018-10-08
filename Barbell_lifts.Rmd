@@ -1,19 +1,31 @@
 ---
 title: "Human activity recognition"
 author: "Michael Berger"
-date: "9 April 2018"  
+date: "8 October 2018"  
 output: html_document
 ---
 
+<style>
+  .col2 {
+    columns: 2 250px;         /* number of columns and width in pixels*/
+    -webkit-columns: 2 250px; /* chrome, safari */
+    -moz-columns: 2 250px;    /* firefox */
+  }
+  .col3 {
+    columns: 3 100px;
+    -webkit-columns: 3 100px;
+    -moz-columns: 3 100px;
+  }
+</style>
 
 With the developement of cheap electronics, a trend has been on the rise lately to measure and record all kinds of personal data. One type of such data is accelerometer readings from various fitness trackers during excersises.
 In this study I am asked to develop a model which will be able to classify performance quality of the excersise based on these readings.
 
-The data is provided by Groupware@LES team of Pontifical Catholic University of Rio de Janeiro.
+The data is provided by  [Groupware@LES](http://groupware.les.inf.puc-rio.br/har) team of Pontifical Catholic University of Rio de Janeiro.
 It contains data gathered in a Unilateral Dumbbell Biceps Curl excersise by 5 people done in a correct way and in 4 incorrect ways. The goal of the study is to correctly classify types of mistakes.
 
 ## Exploratory analysis
-From a brief look on the dataset one can hypothesise that a lot of columns have almost no useful data in them. To check this I make a plot of counts of non-null cells for every column.
+From a brief look on the dataset one can hypothesise that a lot of columns have almost no useful data in them. To check this I make a plot of counts of non empty cells for every column.  
 
 ```{r importing_libraries, echo = F, message=FALSE, warning=FALSE, include=T}
 #rm(list = ls())
@@ -25,6 +37,7 @@ library(iterators,quietly=TRUE)
 library(parallel,quietly=TRUE)
 library(foreach,quietly=TRUE)
 library(doParallel,quietly=TRUE)
+forceTrain = F
 #setwd("~/Studies/Coursera/8 - Practical machine learning/Project/PracticalML/")
 #print(getwd())
 ```
@@ -48,7 +61,7 @@ trn <- read.csv("data/pml-training.csv")
 vld <- read.csv("data/pml-testing.csv")
 ```
 
-```{r cleaning_data,echo = F, eval = T, cache=T, fig.height = 3 }
+```{r cleaning_data,echo = F, eval = T, cache=T, fig.height = 4 , fig.width= 6}
 # Removing missing data 
 #Based on number of non-empty values in each column. 
 
@@ -68,7 +81,7 @@ nonTrash <- function(col)
 #Selecting what columns to leave
 nonT <- apply(trn,2, nonTrash)
 ord <- order(nonT)
-plot(nonT[ord], type = 'h' )
+plot(nonT[ord], type = 'h', ylab = 'non-empty data proportion' )
 nms = names(nonT[nonT>500])
 nms = nms[ ! nms %in% c("X", "raw_timestamp_part_1","raw_timestamp_part_2","num_window","new_window","cvtd_timestamp")]
 
@@ -87,7 +100,7 @@ nms = nms[!nms == "classe"]
 validatSet = vld[,nms]
 
 
-rm(nms, nonT, nonTrash, cnts, As, trnidx)# , trn, tst,vld)
+rm(nms, nonT, nonTrash, trnidx)# , trn, tst,vld)
 
 
 
@@ -101,170 +114,204 @@ rm(nms, nonT, nonTrash, cnts, As, trnidx)# , trn, tst,vld)
 
 
 As can be seen on the plot, about a 100 out of 160 variables have less than 3% meaningful data in them.  Moreover, there are temporal, entry index and measuring window columns which bear no significant information as well. Deleting these will improve performance and accuracy of the model.
-In the end I am left with 53 predictor and 1 dependent variables 
+In the end I am left with 53 predictors and 1 dependent variable  
 
 ## Models
-I am going to use brute force. Just train a number of models using 7-fold cross validation technique and choose the one with best predictive power. The models I have chosen are:
- - Gradient boosting model
- - Linear discriminant analysis
- - Multiple logistic regression
- - Naive Bayes
- - Random Forest
+I am going to use brute force. Just train a number of models using 7-fold cross validation technique and choose the one with best predictive power. The models I have chosen to test are:  
+ - Gradient boosting model (mdlGbm)  
+ - Linear discriminant analysis (mdlLda)    
+ - Multiple logistic regression (mdlMulti)    
+ - Naive Bayes (mdlNb)    
+ - Random Forest (mdlRf)    
 Parallel processing will be used to speed things up.
 
-
-
 ```{r start_cluster, echo=F, warning=FALSE, eval=T}
-#Start cluster
+#Start cluster and load pre-trained models
 cluster <- makeCluster(detectCores()-1)
 registerDoParallel(cluster)
+
+models = NULL
 if(file.exists("models.rds"))
 {
   models = readRDS("models.rds")
 }
 ```
 
+```{r trainmdl, echo=F, include=F, warning=FALSE, eval=T, cache= F}
+#Wrapper function for acquisition of all models - either load them from disk or train 
+trainmdl <- function(mdlName, method, forceTrain = F, ...)
+{
+  mdl <-NULL
+  if (!is.null(models) & !forceTrain)
+  {
+    mdl <- models[[mdlName]]
+  }else
+  {
+    tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+    mdl <-train( classe ~ . , data = trainingSet ,method=method, trControl = tC, ... = ...)
+  }
+  return(mdl)
+}
 
-```{r mdlRf, echo=F, include=F, warning=FALSE, eval=T, cache= TRUE}
+```
+
+```{r mdlRf, echo=F, include=F, warning=FALSE, eval=T, cache= F}
 # Random forest model
-tic <- Sys.time()
-tC = trainControl(method="cv", number=7, allowParallel=TRUE)
-mdlRf <-train( classe ~ . , data = trainingSet ,method="rf", trControl = tC)
-toc <- Sys.time() - tic
-paste("mdlRf trained in ",toc,attr(toc,"units"))
-max(mdlRf$results$Accuracy)
-mdlRf$results
-
+mdlRf <- trainmdl(mdlName = "mdlRf", method="rf", forceTrain = forceTrain)
+                  
+                  # if (exists("models"))
+# {
+#   mdlRf <- models[["mdlRf"]]
+# }else
+# {
+#   tic <- Sys.time()
+#   tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+#   mdlRf <-train( classe ~ . , data = trainingSet ,, trControl = tC)
+#   toc <- Sys.time() - tic
+#   paste("mdlRf trained in ",toc,attr(toc,"units"))
+#   max(mdlRf$results$Accuracy)
+#   mdlRf$results
+# }
 ```
 
-```{r mdlGbm, echo=F, include=F,warning=FALSE, eval=T, cache= TRUE }
+```{r mdlGbm, echo=F, include=F,warning=FALSE, eval=T, cache= F }
 # Gradient boosting model
-tic <- Sys.time()
-tC = trainControl(method="cv", number=7, allowParallel=TRUE)
-mdlGbm <-train( classe ~ . , data = trainingSet ,method="gbm", trControl = tC)
-toc <- Sys.time() - tic
-paste("mdlGbm trained in ",toc,attr(toc,"units"))
+mdlGbm <- trainmdl(mdlName = "mdlGbm", method="gbm", forceTrain = forceTrain)
+
+# tic <- Sys.time()
+# tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+# mdlGbm <-train( classe ~ . , data = trainingSet ,method="gbm", trControl = tC)
+# toc <- Sys.time() - tic
+# paste("mdlGbm trained in ",toc,attr(toc,"units"))
 
 ```
 
-```{r mdlMulti, echo=F, include=F, warning=FALSE, eval=T, cache= TRUE}
+```{r mdlMulti, echo=F, include=F, warning=FALSE, eval=T, cache= F}
 # Multionomial logistic regression model 
+mdlMulti <- trainmdl(mdlName = "mdlMulti", method="multinom", maxit=20000, trace=F, forceTrain = forceTrain)
 
-tic <- Sys.time()
-tC = trainControl(method="cv", number=7,allowParallel=TRUE)
-mdlMulti <-train(classe ~ ., data = trainingSet, maxit=20000, trace=F,method="multinom", trControl = tC)
-toc <- Sys.time() - tic
-paste("mdlMulti trained in: ",toc,attr(toc,"units"))
 
-mdlMulti$results
+# tic <- Sys.time()
+# tC = trainControl(method="cv", number=7,allowParallel=TRUE)
+# mdlMulti <-train(classe ~ ., data = trainingSet, maxit=20000, trace=F,method="multinom", trControl = tC)
+# toc <- Sys.time() - tic
+# paste("mdlMulti trained in: ",toc,attr(toc,"units"))
+# 
+# mdlMulti$results
 
 
 ```
 
-```{r mdlLda, echo=F, include=F, warning=FALSE, eval=T, cache= TRUE}
+```{r mdlLda, echo=F, include=F, warning=FALSE, eval=T, cache= F}
 # Linear Discriminant Analysis model
-tic <- Sys.time()
-tC = trainControl(method="cv", number=7, allowParallel=TRUE)
-mdlLda <-train( classe ~ . , data = trainingSet ,method="lda", trControl = tC)
-toc <- Sys.time() - tic
-paste("mdlLda trained in ",toc,attr(toc,"units"))
-#mdlGbm$times$everything['elapsed']
-mdlLda$results
+mdlLda <- trainmdl(mdlName = "mdlLda", method="lda", forceTrain = forceTrain)
+
+# tic <- Sys.time()
+# tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+# mdlLda <-train( classe ~ . , data = trainingSet ,method="lda", trControl = tC)
+# toc <- Sys.time() - tic
+# paste("mdlLda trained in ",toc,attr(toc,"units"))
+# #mdlGbm$times$everything['elapsed']
+# mdlLda$results
 
 ```
 
-```{r mdlNb, echo=F, include=F, warning=FALSE, eval=T, cache= TRUE}
+```{r mdlNb, echo=F, include=T, warning=FALSE, eval=T, cache= F}
 # Naive Bayes model
-tic <- Sys.time()
-tC = trainControl(method="cv", number=7, allowParallel=TRUE)
-mdlNb <-train( classe ~ . , data = trainingSet ,method="nb", trControl = tC)
-toc <- Sys.time() - tic
-paste("mdlNb trained in ",toc,attr(toc,"units"))
-mdlNb$results
+mdlNb <- trainmdl(mdlName = "mdlNb", method="nb", forceTrain = forceTrain)
+# tic <- Sys.time()
+# tC = trainControl(method="cv", number=7, allowParallel=TRUE)
+# mdlNb <-train( classe ~ . , data = trainingSet ,method="nb", trControl = tC)
+# toc <- Sys.time() - tic
+# paste("mdlNb trained in ",toc,attr(toc,"units"))
+# mdlNb$results
 
 ```
 
 
 ```{r stop_cluster, echo=F, include=F, warning=FALSE, eval=T}
 #Stop cluster
-cluster
 stopCluster(cluster)
 ```
 
 
-```{r Saving, echo=F, include=F,  warning=F, eval=T}
+```{r Saving, echo=F, include=F,  warning=F, eval=F}
 #Saving the models to disc
-models <- mget(ls(pattern = 'mdl*'))
+models <- mget(ls(pattern = '^mdl*'))
 fname <- paste("models_",Sys.Date(),".rds", sep = '')
 saveRDS(models, fname)
-file.copy(from = fname,to = 'models.rds',overwrite = T)
-rm(models)
+#file.copy(from = fname,to = 'models.rds',overwrite = T)
+#rm(models)
 ```
 
 ```{r Reading, echo=F, warning=F, eval=F}
-#Reading and creating an object in global environment for every model 
+print("Reading and creating an object in global environment for every model")
 models = readRDS("models.rds")
 
 lapply(X = names(models), FUN = function(name) {assign(name,  models[[name]], envir = .GlobalEnv)})
 
 ```
 
-```{r Accuracies, echo=F}
-models <- mget(ls(pattern = 'mdl*'))
-accs <- as.data.frame(lapply(X = models, FUN = function(x) {c('accuracy' = max(x$results$Accuracy), x$times$everything['elapsed'])}))
+## Training Results
+After the training is complete I acqure the following results. The two winning models are Gradient boosting and Random forests. 3 other models do not approach even 95% accuracy. Further, while having also high accuracy, the Gbm model is not sufficiently accurate to pass the final Quiz. 
+
+
+```{r Accuracies, echo=F, cache =T}
+models <- mget(ls(pattern = '^mdl*'))
+accs <- as.data.frame(lapply(X = models, FUN = function(x) {c('accuracy' = max(x$results$Accuracy),'kappa' = max(x$results$Kappa), x$times$everything['elapsed'])}))
 accs
 ```
 
+## Final Model
+So based on the accuracies, the best model is the Random forest model. Let's examine it deeper. Below is out-of-sample error rates for the model.  
 
 
-```{r prediction, echo=F} 
+<div class="col3">
+
+```{r Overall, echo=F, eval = T} 
 #Prediction;  out of sample error rate
 pred <- predict(mdlRf, newdata = testingSet)
-mean(pred == testingSet$classe)
-confusionMatrix(pred, testingSet$classe)
+cm <- confusionMatrix(pred, testingSet$classe)
+print(as.data.frame(cm$overall))
 ```
 
-```{r exploratory1, eval=FALSE, include=FALSE}
-g <- ggplot(data = trainingSet) + geom_bar(aes(classe), size = .1) 
-g
+
+```{r Confusion_matrix, echo=F, fig.width=4, fig.height=3,fig.align='right' }
+
+tile <- ggplot() +
+geom_tile(aes(x=Reference, y=reorder(Prediction, desc(Prediction)),fill=Freq),data=as.data.frame(cm$table), color="black",size=0.1) +
+labs(x="Actual",y="Predicted")
+tile = tile +
+geom_text(aes(x=Reference,y=reorder(Prediction, desc(Prediction)), label=sprintf("%.0f", Freq)),data=as.data.frame(cm$table), size=3, colour="black") + scale_fill_gradient(low='white',  high="red")
+tile
 ```
 
-```{r exploratory2, eval=FALSE, include=FALSE}
-g <- ggplot(data = trn) + geom_point(aes( y = num_window, x = raw_timestamp_part_1 + raw_timestamp_part_2, col = user_name), size = .1) 
-g
+</div>
+
+
+```{r CM_byClass, echo=F, fig.height = 4 ,fig.width = 5 }
+
+t(cm$byClass)
 ```
 
-```{r exploratory3, eval=FALSE, include=FALSE}
-trnsub <- trn[trn$user_name == "carlitos",]
-g <- ggplot(data = trnsub[1:1000,]) + geom_line(aes( y = num_window, x = raw_timestamp_part_1 + raw_timestamp_part_2, col = num_window), size = .1) 
-g
-#plot(trn$num_window)
-```
+And the model performs excellent giving almost 100% on all metrics. 
 
-```{r exploratory4, eval=FALSE, include=FALSE}
-trnsub <- trn[trn$user_name == "carlitos" & trn$classe %in% c("A" , "B"),]
-g <- ggplot(data = trnsub) + geom_line(aes( y = var_accel_arm, x = raw_timestamp_part_1 +raw_timestamp_part_2 , color = classe),  size = .1 ) 
-g
-#plot(trn$num_window)
-```
+## Variable importance
+Below is the variable importance plot for the model.  
+```{r exploratory2, echo = F, eval=T,fig.height= 8, fig.width= 6}
+varImpPlot(mdlRf$finalModel, main="Random Forest Variable Importance Plot",type=2, n.var = 59, cex = .8)
+# imp <- importance(mdlRf$finalModel)
+# imps <- data.frame(imp[order(imp , decreasing = T ),], row.names = rownames(imp)[order(imp, decreasing = T)])
+# imps <- rownames(imps)[1:22]
+# toString(imps, sep = " ")
+```  
+  
+It might be viable to try and fit former models with only about a third most important parameters, but this is out of scope of his article.
 
-```{r exploratory5, eval=FALSE, include=FALSE}
-trnsub <- trn[trn$user_name == "carlitos" & trn$classe == "A",]
+##Conclusion
 
-g <- ggplot(data = subset(trnsub, classe %in% c("A" , "A"))) + geom_line(aes( y = pitch_arm, x = raw_timestamp_part_1 , color = classe),  size = .1 ) 
-g
-#plot(trn$num_window)
-```
+In this study I have successfully fitted a model that can classify excersise performance with very high accuracy.
+Moreover, the model does not require any summary parameters that are calculated at the end of excersise set or even at fixed time windows. Which means that this model may be applied to real-time excersise supervision and feedback as it is, with minimal adjustments.  
 
-```{r exploratory6, eval=FALSE, include=FALSE}
-trnsub <- trn[trn$user_name == "carlitos",]
-g <- ggplot(data = trnsub) 
 
-g <- g + geom_line(aes( y = roll_belt, x = raw_timestamp_part_1 + raw_timestamp_part_2), color = "red", size = .1) 
 
-g <- g + geom_line(aes( y = pitch_belt, x = raw_timestamp_part_1 + raw_timestamp_part_2), color = "green", size = .1) 
-
-g <- g +  geom_line(aes( y = yaw_belt, x = raw_timestamp_part_1 + raw_timestamp_part_2), color = "blue", size = .1) 
-g
-#plot(trn$num_window)
-```

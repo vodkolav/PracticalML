@@ -38,4 +38,10 @@
 "magnet_forearm_x"     "magnet_forearm_y"     "magnet_forearm_z"     
 
 
+roll_belt,roll_forearm, roll_dumbbell,roll_arm,
+ yaw_belt,                             yaw_arm, 
+pitch_forearm, pitch_belt, 
+magnet_dumbbell_z, magnet_dumbbell_y,  magnet_dumbbell_x, magnet_belt_z,  magnet_belt_y, magnet_belt_x magnet_forearm_z, 
 
+accel_dumbbell_y, accel_belt_z, accel_forearm_x, accel_dumbbell_z, accel_forearm_z total_accel_dumbbell, 
+gyros_belt_z, , 
